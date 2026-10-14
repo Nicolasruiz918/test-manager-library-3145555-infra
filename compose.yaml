@@ -1,0 +1,88 @@
+name: manager-library
+x-api-environment: &api-environment
+  APP_ENV: ${APP_ENV:-demo}
+  APP_DEBUG: "false"
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_DATABASE: ${POSTGRES_DB:-manager_library}
+  DB_USERNAME: ${POSTGRES_USER:-library}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}
+  JWT_SECRET: ${JWT_SECRET:?Configure JWT_SECRET}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:?Configure ADMIN_USERNAME}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Configure ADMIN_PASSWORD}
+  FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://localhost:8443}
+  COVER_DIRECTORY: /app/storage/covers
+  DEMO_BUSINESS_TIME: ${DEMO_BUSINESS_TIME:-}
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-manager_library}
+      POSTGRES_USER: ${POSTGRES_USER:-library}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "log_statement=none", "-c", "log_min_error_statement=panic", "-c", "log_parameter_max_length_on_error=0"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-library} -d ${POSTGRES_DB:-manager_library}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  init:
+    image: manager-library-api:local
+    build:
+      context: ../test-manager-library-3145555-api
+    environment: *api-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["php", "artisan", "library:install"]
+    restart: "no"
+  api:
+    image: manager-library-api:local
+    build:
+      context: ../test-manager-library-3145555-api
+    environment:
+      <<: *api-environment
+      PHP_CLI_SERVER_WORKERS: "4"
+    volumes:
+      - covers:/app/storage/covers
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(file_get_contents('http://127.0.0.1:8000/health') === '{\"status\":\"ok\"}' ? 0 : 1);"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    image: manager-library-app:local
+    build:
+      context: ../test-manager-library-3145555-app
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  gateway:
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    ports:
+      - "127.0.0.1:${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres_data:
+  covers:
+  caddy_data:
+  caddy_config:
